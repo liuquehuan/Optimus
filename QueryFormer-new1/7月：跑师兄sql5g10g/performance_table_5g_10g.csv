@@ -1,0 +1,3 @@
+Method,Sum,25th,Median,75th,95th,Training Time,Inference Time
+QueryFormer-5g,32641,41.1,57.3,84.3,92.4,,
+QueryFormer-10g,17176 (0.53x),59.1,72.5,84.8,94.8,,

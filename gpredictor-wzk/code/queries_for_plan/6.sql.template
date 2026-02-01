@@ -1,0 +1,8 @@
+select
+    sum(ol_amount) as revenue
+from
+    order_line
+where
+    ol_delivery_d >= %(begin_date)s
+    and ol_delivery_d < %(end_date)s
+    and ol_quantity between 1 and 100000;

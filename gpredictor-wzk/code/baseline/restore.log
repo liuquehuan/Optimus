@@ -1,0 +1,13 @@
+pg_restore: error: could not execute query: ERROR:  unrecognized configuration parameter "transaction_timeout"
+Command was: SET transaction_timeout = 0;
+pg_restore: error: could not execute query: ERROR:  constraint "fkey_supplier_nation" of relation "supplier" does not exist
+Command was: ALTER TABLE ONLY public.supplier DROP CONSTRAINT fkey_supplier_nation;
+pg_restore: error: could not execute query: ERROR:  constraint "fkey_stock_2" of relation "stock" does not exist
+Command was: ALTER TABLE ONLY public.stock DROP CONSTRAINT fkey_stock_2;
+pg_restore: error: could not execute query: ERROR:  constraint "fkey_stock_1" of relation "stock" does not exist
+Command was: ALTER TABLE ONLY public.stock DROP CONSTRAINT fkey_stock_1;
+pg_restore: error: could not execute query: ERROR:  constraint "fkey_orders_1" of relation "orders" does not exist
+Command was: ALTER TABLE ONLY public.orders DROP CONSTRAINT fkey_orders_1;
+pg_restore: error: could not execute query: ERROR:  constraint "fkey_order_line_2" of relation "order_line" does not exist
+Command was: ALTER TABLE ONLY public.order_line DROP CONSTRAINT fkey_order_line_2;
+pg_restore: warning: errors ignored on restore: 6

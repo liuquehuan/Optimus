@@ -1,0 +1,6 @@
+select sourceid,targetid,
+case when sourceid= 13454491 then 'outbound' when targetid= 13454491 then 'inbound' end as direction,
+sum(amount) as total_amount
+from transfer where sourceid= 13454491 or targetid = 13454491
+group by sourceid,targetid
+order by total_amount desc;
