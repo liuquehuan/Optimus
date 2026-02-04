@@ -1,7 +1,0 @@
-torch
-scipy
-numpy
-pandas
-matplotlib
-pyzmq
-jupyter
