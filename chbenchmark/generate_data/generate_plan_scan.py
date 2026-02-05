@@ -77,7 +77,7 @@ for hint_id in range(32, 33):
             print(_)
             tp1 = p1.map_async(htapcontroller.oltp_worker, range(100))
 
-    with Pool(k2 + 1) as p2:  # 复用这个 Pool，k2+1 因为 run_ap_with_tp 需要 TP_WORKERS+1 个进程
+    with Pool(k2 + 1) as p2:
         manager = Manager()
         for i in range(100):
             if i % 5 == 0:

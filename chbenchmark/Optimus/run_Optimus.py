@@ -71,12 +71,10 @@ def get_contention_vector():
     r_mem = psutil.virtual_memory().percent / 100.0
     
     # I/O利用率 (0-1)
-    # 使用磁盘I/O计数来估算I/O压力
     disk_io = psutil.disk_io_counters()
     if hasattr(get_contention_vector, 'prev_io'):
         io_diff = (disk_io.read_bytes + disk_io.write_bytes - 
                    get_contention_vector.prev_io)
-        # 归一化: 假设100MB/s为满负载
         r_io = min(io_diff / (100 * 1024 * 1024 * 0.1), 1.0)
     else:
         r_io = 0.0
