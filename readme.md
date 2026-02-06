@@ -37,5 +37,6 @@ python chbenchmark/Optimus/run_Optimus.py /path_to_scan_model /path_to_join_mode
 python hybench/Optimus/run_Optimus.py /path_to_scan_model /path_to_join_model --db=10x
 ```
 
-![Results](motivation.png)
-
+| ![Results](motivation.png "Results") |
+| :----------------------------------: |
+|              *Results*               |
