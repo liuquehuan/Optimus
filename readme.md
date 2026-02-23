@@ -27,7 +27,17 @@ python hybench/generate_data/generate_plan_scan.py --db=10x
 python hybench/generate_data/generate_plan_join.py --db=10x
 ```
 
-2.Train the model and run test workload. Scan model and join model will be saved on /path_to_scan_model /path_to_join_model, respectively.
+2.Train the model. Scan model and join model will be saved on /path_to_scan_model and /path_to_join_model, respectively.
+
+```bash
+# CHBenchmark
+python chbenchmark/Optimus/training.py /path_to_scan_model /path_to_join_model --db=10x
+
+# Hybench
+python hybench/Optimus/training.py /path_to_scan_model /path_to_join_model --db=10x
+```
+
+3.Run the test workload. Scan model and join model will be loaded from /path_to_scan_model and /path_to_join_model, respectively.
 
 ```bash
 # CHBenchmark

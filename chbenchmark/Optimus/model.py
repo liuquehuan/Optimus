@@ -1,4 +1,3 @@
-# import json
 import numpy as np
 import torch
 import torch.optim
@@ -35,18 +34,6 @@ def _node_level_path(base):
 def _inv_log1p(x):
     return np.exp(x) - 1
 
-# class BaoData:
-#     def __init__(self, data):
-#         assert data
-#         self.__data = data
-
-#     def __len__(self):
-#         return len(self.__data)
-
-#     def __getitem__(self, idx):
-#         return (self.__data[idx]["tree"],
-#                 self.__data[idx]["target"])
-
 def collate(x):
     trees = []
     targets = []
@@ -58,26 +45,21 @@ def collate(x):
     targets = torch.tensor(targets)
     return trees, targets
 
-class BaoRegression:
+class Model:
     # def __init__(self, verbose=False, have_cache_data=False):
     def __init__(self, verbose=False, node_level=False):
         self.__verbose = verbose
         self.__node_level = node_level
 
-        ## log1p：加1取对数
-        ## 第二个参数是log1p的逆变换
         log_transformer = preprocessing.FunctionTransformer(
             np.log1p, _inv_log1p,
             validate=True)
-        ## 归一化
         scale_transformer = preprocessing.MinMaxScaler()
 
         self.__pipeline = Pipeline([("log", log_transformer),
                                     ("scale", scale_transformer)])
         
         self.__tree_transform = TreeFeaturizer()
-        # self.__have_cache_data = have_cache_data
-        # self.__in_channels = self.__tree_transform.num_operators() + 2
         self.__in_channels = 3 + 13
         self.__net = net.BaoNet(self.__in_channels, self.__node_level)
         self.__n = 0
@@ -133,14 +115,8 @@ class BaoRegression:
 
             # X = [json.loads(x) if isinstance(x, str) else x for x in X]
             self.__n = len(X)
-                
-            # transform the set of trees into feature vectors using a log
-            # (assuming the tail behavior exists, TODO investigate
-            #  the quantile transformer from scikit)
-            # y = self.__pipeline.fit_transform(y.reshape(-1, 1)).astype(np.float32)
             
         else:
-            ## 拆出所有的join子树
             _X = []
             y = []
 
@@ -232,8 +208,6 @@ class BaoRegression:
             self.__log("Stopped training after max epochs")
 
     def predict(self, X):
-        ## 输入是一棵树：str
-        ## net的输入形状：list[(my_vec, left, right)]
         if not isinstance(X, list):
             X = [X]
         X = [json.loads(x) if isinstance(x, str) else x for x in X]
@@ -258,7 +232,6 @@ class BaoRegression:
             def recurse(x):
                 nonlocal hint
                 if is_leaf(x):
-                    ## __featurize_scan返回值
                     ## return (np.concatenate((arr, self.__stats(node))),
                     ##         self.__relation_name(node))
                     ## self.__relation_name(node): str
@@ -285,10 +258,6 @@ class BaoRegression:
                 rel.extend(lrel)
                 rel.extend(rrel)
                 my_type = x[-2]
-
-                ## 逻辑：如果儿子全是列扫就是vjoin（这种情况好像不需要特别处理，应该会自动选择到vjoin），否则要预测。hint包含join算子和表名
-                ## todo：怎么收集儿子扫描类别和表名
-                ## todo：根据分类结果修改type
 
                 if is_leaf(x[1]) and is_leaf(x[2]):
                     assert my_type < 3
@@ -318,7 +287,7 @@ def train_and_save_model(fn, X, y, verbose=True, node_level=False, reg=None):
     import time
     
     if reg is None:
-        reg = BaoRegression(verbose=verbose, node_level=node_level)
+        reg = Model(verbose=verbose, node_level=node_level)
 
     start = time.time()
     reg.fit(X, y)

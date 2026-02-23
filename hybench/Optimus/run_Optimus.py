@@ -1,7 +1,6 @@
 import psycopg2 # type: ignore
 import os
-# import model
-import torch # type: ignore
+from model import Model
 import numpy as np # type: ignore
 import time
 import datetime
@@ -10,17 +9,9 @@ import sys
 import argparse
 import psutil # type: ignore
 sys.path.append("../../..")
-from model import train_and_save_model
 from utils.htap_query_hybench import HTAPController
 from utils.restore import restore_hybench, restore_hybench_10x
 from utils.utils import run_ap_with_tp
-
-
-def load_plans(filepath: str):
-    with open(filepath, "r") as f:
-        plan_list = f.readlines()
-        plan_list = [eval(x) for x in plan_list]
-        return plan_list
 
 
 def extract_scan_rows_from_plan(plan_node, table_names):
@@ -73,59 +64,13 @@ def get_contention_vector():
     return np.array([r_cpu, r_mem, r_io])
 
 
-def cost_split(plans, n, train_pos, num_stream):
-    X_cost, y_cost, X_latency, y_latency = [], [], [], []
-    failed_count = 0
-
-    for i in range(num_stream):
-        start = i * 13 * n
-        for id in range(13):
-            cur_id = start + id
-            cost = []
-            
-            for _ in range(n):
-                plan_cost = None
-                if plans[cur_id] is not None:
-                    plan_cost = plans[cur_id]['Execution Time'] if 'Execution Time' in plans[cur_id] else plans[cur_id]['Plan']['Total Cost']
-
-                if plan_cost is not None:
-                    cost.append(plan_cost)
-                else:
-                    cost.append(6000000000000)
-                cur_id += 13
-            
-            if min(cost) == 6000000000000:
-                failed_count += 1
-            else:
-                if 'Execution Time' in plans[start]:
-                    y_latency.append(cost.index(min(cost)))
-                    if train_pos == -1:
-                        X_latency.append(plans[start + id + 13 * cost.index(min(cost))])
-                    else:
-                        X_latency.append(plans[start + id + 13 * train_pos])
-                else:
-                    y_cost.append(cost.index(min(cost)))
-                    if train_pos == -1:
-                        X_cost.append(plans[start + id + 13 * cost.index(min(cost))])
-                    else:
-                        X_cost.append(plans[start + id + 13 * train_pos])
-
-    print("failed_count:", failed_count)
-    # assert failed_count == 0
-    if (train_pos == -1):
-        print(X_latency[10], X_latency[13 + 10], X_latency[13 * 2 + 10])
-    return  X_cost, y_cost, X_latency, y_latency
-
-
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='运行 TCNN-- 基准测试')
-    parser.add_argument('scan_model', type=str, help='扫描模型文件路径')
-    parser.add_argument('join_model', type=str, help='连接模型文件路径')
-    parser.add_argument('--db', type=str, default='1x', choices=['1x', '10x'],
-                        help='选择数据库规模: 1x (默认) 或 10x')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('scan_model', type=str)
+    parser.add_argument('join_model', type=str)
+    parser.add_argument('--db', type=str, default='1x', choices=['1x', '10x'])
     args = parser.parse_args()
 
-    # 根据参数选择数据库和恢复函数
     if args.db == '10x':
         restore_hybench_10x()
         database_name = "hybench_sf10"
@@ -141,18 +86,15 @@ if __name__ == "__main__":
         htapcontroller_param = "1x"
         timeout = 20000
     
-    # 从sql目录读取SQL查询文件
     sql_queries = []
-    for ap_id in range(1, 14):  # AP-1 到 AP-13
+    for ap_id in range(1, 14):
         ap_queries = []
-        # 获取该AP的所有SQL文件（按字母后缀排序）
         ap_prefix = f"{ap_id:02d}"
         sql_files = []
         for filename in sorted(os.listdir(sql_dir)):
             if filename.startswith(ap_prefix) and filename.endswith(".sql"):
                 sql_files.append(filename)
         
-        # 读取每个SQL文件的内容
         for filename in sorted(sql_files):
             sql_path = os.path.join(sql_dir, filename)
             with open(sql_path, "r", encoding="utf-8") as f:
@@ -161,34 +103,11 @@ if __name__ == "__main__":
         
         sql_queries.append(ap_queries)
 
-    CUDA = torch.cuda.is_available()
-    print("CUDA:", CUDA)
-    # 根据数据库规模选择数据文件路径
-    if args.db == '10x':
-        scan_plan_path = "../../../data/cost_col_hint_plan_hybench_10x.txt"
-        join_plan_path = "../../../data/scan_aware_cost_join_type_hint_plan_hybench_10x.txt"
-    else:
-        scan_plan_path = "../../../data/cost_col_hint_plan_hybench.txt"
-        join_plan_path = "../../../data/cost_join_type_hint_plan_hybench.txt"
-    scan_plan, join_plan = load_plans(scan_plan_path), load_plans(join_plan_path)
+    scan_reg = Model()
+    scan_reg.load(args.scan_model)
 
-    X_cost, y_cost, X_latency, y_latency = cost_split(scan_plan, 35, 32, 160)
-    scan_reg = train_and_save_model(args.scan_model, X_cost, y_cost)
-    scan_reg = train_and_save_model(args.scan_model, X_latency, y_latency, reg=scan_reg)
-    del scan_plan
-
-    X_cost, y_cost, X_latency, y_latency = cost_split(join_plan, 7, -1, 160)
-    join_reg = train_and_save_model(args.join_model, X_cost, y_cost, node_level=True)
-    join_reg = train_and_save_model(args.join_model, X_latency, y_latency, reg=join_reg, node_level=True)
-    del join_plan
-
-
-    # print("Model saved, attempting load...")
-    # scan_reg = model.BaoRegression()
-    # scan_reg.load(args.scan_model)
-
-    # join_reg = model.BaoRegression()
-    # join_reg.load(args.join_model)
+    join_reg = Model()
+    join_reg.load(args.join_model)
 
     table = ["transfer", "loantrans", "customer", "checking", "loanapps"]
     scan_hint_set = []

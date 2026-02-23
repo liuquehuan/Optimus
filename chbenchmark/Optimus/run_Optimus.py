@@ -10,7 +10,7 @@ import sys
 import argparse
 import psutil # type: ignore
 sys.path.append("../../")
-from model import train_and_save_model
+from model import Model
 from utils.htap_query import HTAPController
 from utils.restore import restore, restore_10x
 from utils.utils import run_ap_with_tp
@@ -26,13 +26,6 @@ for i in range(1, 23):
                 tup = eval(tup)
                 param.append(tup[0])
     params.append(param)
-
-
-def load_plans(filepath: str):
-    with open(filepath, "r") as f:
-        plan_list = f.readlines()
-        plan_list = [eval(x) for x in plan_list]
-        return plan_list
 
 
 def extract_scan_rows_from_plan(plan_node, table_names):
@@ -83,85 +76,21 @@ def get_contention_vector():
     return np.array([r_cpu, r_mem, r_io])
 
 
-def cost_split(plans, n, train_pos, num_stream):
-    X_cost, y_cost, X_latency, y_latency = [], [], [], []
-    failed_count = 0
-
-    for i in range(num_stream):
-        start = i * 22 * n
-        for id in range(22):
-            cur_id = start + id
-            cost = []
-            
-            for _ in range(n):
-                plan_cost = None
-                if plans[cur_id] is not None:
-                    plan_cost = plans[cur_id]['Execution Time'] if 'Execution Time' in plans[cur_id] else plans[cur_id]['Plan']['Total Cost']
-
-                if plan_cost is not None:
-                    cost.append(plan_cost)
-                else:
-                    cost.append(6000000000000)
-                cur_id += 22
-            
-            if min(cost) == 6000000000000:
-                failed_count += 1
-            else:
-                if 'Execution Time' in plans[start]:
-                    y_latency.append(cost.index(min(cost)))
-                    if train_pos == -1:
-                        X_latency.append(plans[start + id + 22 * cost.index(min(cost))])
-                    else:
-                        X_latency.append(plans[start + id + 22 * train_pos])
-                else:
-                    y_cost.append(cost.index(min(cost)))
-                    if train_pos == -1:
-                        X_cost.append(plans[start + id + 22 * cost.index(min(cost))])
-                    else:
-                        X_cost.append(plans[start + id + 22 * train_pos])
-
-    print("failed_count:", failed_count)
-    # assert failed_count == 0
-    if (train_pos == -1):
-        print(X_latency[15], X_latency[22 + 15], X_latency[22 * 2 + 15])
-    return  X_cost, y_cost, X_latency, y_latency
-
-
 if __name__ == "__main__":
-    import sys
-    parser = argparse.ArgumentParser(description='运行 TCNN-- 基准测试')
-    parser.add_argument('scan_model', type=str, help='扫描模型文件路径')
-    parser.add_argument('join_model', type=str, help='连接模型文件路径')
-    parser.add_argument('--db', type=str, default='1x', choices=['1x', '10x'],
-                        help='选择数据库规模: 1x (默认) 或 10x')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('scan_model', type=str)
+    parser.add_argument('join_model', type=str)
+    parser.add_argument('--db', type=str, default='1x', choices=['1x', '10x'])
     args = parser.parse_args()
 
     CUDA = torch.cuda.is_available()
     print("CUDA:", CUDA)
-    # 根据数据库规模选择不同的计划文件
-    if args.db == '10x':
-        scan_plan_path, join_plan_path = "../../../data/cost_col_hint_plan_10x.txt", "../../../data/cost_join_type_hint_plan_10x.txt"
-    else:
-        scan_plan_path, join_plan_path = "../../../data/cost_col_hint_plan.txt", "../../../data/cost_join_type_hint_plan.txt"
-    scan_plan, join_plan = load_plans(scan_plan_path), load_plans(join_plan_path)
 
-    X_cost, y_cost, X_latency, y_latency = cost_split(scan_plan, 35, 32, 80)
-    scan_reg = train_and_save_model(args.scan_model, X_cost, y_cost)
-    scan_reg = train_and_save_model(args.scan_model, X_latency, y_latency, reg=scan_reg)
-    del scan_plan
+    scan_reg = Model()
+    scan_reg.load(sys.argv[1])
 
-    X_cost, y_cost, X_latency, y_latency = cost_split(join_plan, 7, -1, 80)
-    join_reg = train_and_save_model(args.join_model, X_cost, y_cost, node_level=True)
-    join_reg = train_and_save_model(args.join_model, X_latency, y_latency, reg=join_reg, node_level=True)
-    del join_plan
-
-
-    # print("Model saved, attempting load...")
-    # scan_reg = model.BaoRegression()
-    # scan_reg.load(sys.argv[1])
-
-    # join_reg = model.BaoRegression()
-    # join_reg.load(sys.argv[2])
+    join_reg = Model()
+    join_reg.load(sys.argv[2])
 
     table = ["order_line", "stock", "customer", "orders", "item"]
     scan_hint_set = []
