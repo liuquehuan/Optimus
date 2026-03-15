@@ -16,7 +16,8 @@ def load_data_from_matrix(vmatrix, ematrix):
     idx_features_labels = vmatrix
 
     # encode vertices
-    features, type = np.array(idx_features_labels[:, 1:3]), np.array(idx_features_labels[:, 3:]) ## 看上去是把第0维（节点oid）和最后一维（runtime）去掉
+    # features, type = np.array(idx_features_labels[:, 1:]), np.array(idx_features_labels[:, 3:]) ## 看上去是把第0维（节点oid）和最后一维（runtime）去掉
+    features = np.array(idx_features_labels[:, 1:]) ## 看上去是把第0维（节点oid）和最后一维（runtime）去掉
 
     # encode edges
     idx = np.array(idx_features_labels[:, 0], dtype=np.int32) ## oid
@@ -38,8 +39,6 @@ def load_data_from_matrix(vmatrix, ematrix):
     # build symmetric adjacency matrix
     # adj = adj + adj.T.multiply(adj.T > adj) - adj.multiply(adj.T > adj)
 
-    features = normalize(features)
-    features = np.concatenate((features, type), axis=1)
     adj = normalize(adj + sp.eye(adj.shape[0])) ## 加上一个单位阵，使每个节点都产生自环。这里的规范化是为了后续注意力的计算。
 
     features = torch.FloatTensor(features)

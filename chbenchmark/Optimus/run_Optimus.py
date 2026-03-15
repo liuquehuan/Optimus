@@ -1,6 +1,5 @@
 import psycopg2 # type: ignore
 import os
-# import model
 import torch # type: ignore
 import numpy as np # type: ignore
 import time
@@ -10,7 +9,7 @@ import sys
 import argparse
 import psutil # type: ignore
 sys.path.append("../../")
-from model import Model
+from HGT.train import Optimus
 from utils.htap_query import HTAPController
 from utils.restore import restore, restore_10x
 from utils.utils import run_ap_with_tp
@@ -29,10 +28,6 @@ for i in range(1, 23):
 
 
 def extract_scan_rows_from_plan(plan_node, table_names):
-    """
-    从执行计划中提取每个表的扫描行数
-    返回: dict {table_name: scan_rows}
-    """
     scan_rows = {t: 0 for t in table_names}
     
     def traverse(node):
@@ -53,17 +48,10 @@ def extract_scan_rows_from_plan(plan_node, table_names):
 
 
 def get_contention_vector():
-    """
-    获取当前系统的资源竞争信息向量 R(t) = [r_cpu, r_mem, r_io]
-    返回值范围为 [0, 1]，表示资源利用率
-    """
-    # CPU利用率 (0-1)
     r_cpu = psutil.cpu_percent(interval=0.1) / 100.0
     
-    # 内存利用率 (0-1)
     r_mem = psutil.virtual_memory().percent / 100.0
     
-    # I/O利用率 (0-1)
     disk_io = psutil.disk_io_counters()
     if hasattr(get_contention_vector, 'prev_io'):
         io_diff = (disk_io.read_bytes + disk_io.write_bytes - 
@@ -86,10 +74,10 @@ if __name__ == "__main__":
     CUDA = torch.cuda.is_available()
     print("CUDA:", CUDA)
 
-    scan_reg = Model()
+    scan_reg = Optimus()
     scan_reg.load(sys.argv[1])
 
-    join_reg = Model()
+    join_reg = Optimus()
     join_reg.load(sys.argv[2])
 
     table = ["order_line", "stock", "customer", "orders", "item"]
@@ -127,7 +115,6 @@ if __name__ == "__main__":
     failed, scan_failed, join_failed = [], [], []
     explain_time, inference_time = 0, 0
     k2 = 20
-    # 根据数据库规模设置参数
     if args.db == '10x':
         k1 = 500000
         restore_10x()
@@ -179,18 +166,14 @@ if __name__ == "__main__":
                 explain_time += end - start
 
                 start = time.time()
-                logits = scan_reg.predict(plan)[0]  # shape: (35,)
-                # print("shape(logits):", logits.shape)
+                logits = scan_reg.predict(plan)  # shape: (35,)
                 
-                # ====== 从查询计划中提取每个表的扫描行数 ======
                 query_scan_rows = extract_scan_rows_from_plan(plan['Plan'], table)
                 total_scan_rows = sum(query_scan_rows.values())
                 
-                # 避免除零错误
                 if total_scan_rows == 0:
                     total_scan_rows = 1.0
                 
-                # todo: scan_rows
                 table_stats = {}
                 for t in table:
                     table_stats[t] = {}
@@ -207,16 +190,11 @@ if __name__ == "__main__":
 
                     extract_main_rows(plan_t['Plan'], table_stats)
                 
-                # ====== 获取当前系统资源竞争信息 R(t) ======
                 R_t = get_contention_vector()  # [r_cpu, r_mem, r_io]
                 
-                # ====== 定义路径特定的资源消耗向量 ======
-                # 根据论文中的示例值
-                s_row = np.array([0.6, 1.0, 0.5])  # Row scan的资源消耗 [cpu, mem, io]
-                s_col = np.array([0.4, 0.6, 0.2])  # Column scan的资源消耗 [cpu, mem, io]
+                s_row = np.array([0.6, 1.0, 0.5])
+                s_col = np.array([0.4, 0.6, 0.2])
                 
-                # ====== 可学习参数向量 η ======
-                # 初始化为均匀权重，后续可以通过训练学习
                 eta = np.array([0, 0, 0])
                 
                 theta = {t: 0 for t in table}
@@ -225,12 +203,10 @@ if __name__ == "__main__":
                 for hint_id in range(32):
                     total_delta_cost = 0.0
                     
-                    # ====== 计算聚合资源消耗 S(q,h) ======
-                    S_qh = np.zeros(3)  # [cpu, mem, io]
+                    S_qh = np.zeros(3)
                     
                     for table_name in table:
                         
-                        # ====== 计算 w_T: 查询在该表上扫描的行数占总扫描行数的比例 ======
                         w_T = query_scan_rows.get(table_name, 0) / total_scan_rows
                         
                         delta_rows = table_stats[table_name]['delta_rows']
@@ -244,21 +220,16 @@ if __name__ == "__main__":
                         table_idx = table.index(table_name)
                         use_columnar = (hint_id >> table_idx) & 1
                         
-                        # Delta store cost
                         C_delta_T = theta[table_name] * m_T * use_columnar
                         total_delta_cost += w_T * C_delta_T
                         
-                        # ====== 累加资源消耗: S(q,h) = Σ_T w_T * s_p(h,t) ======
                         if use_columnar:
                             S_qh += w_T * s_col
                         else:
                             S_qh += w_T * s_row
                     
-                    # ====== 计算 Contention Cost: D_contention = η^T (R(T) · S(q,h)) ======
-                    # 元素级乘法 R(T) · S(q,h)，然后加权求和
                     contention_cost = np.dot(eta, R_t * S_qh)
                     
-                    # ====== 综合调整 logits ======
                     adjusted_logits[hint_id] = logits[hint_id] - total_delta_cost - contention_cost
                 
                 scan_hint_id = int(np.argmax(adjusted_logits))
@@ -279,7 +250,7 @@ if __name__ == "__main__":
                 explain_time += end - start
 
                 start = time.time()
-                join_hint = join_reg.predict(plan)
+                join_hint = join_reg.run_test_upd(plan)
                 end = time.time()
                 inference_time += end - start
 
@@ -288,10 +259,6 @@ if __name__ == "__main__":
                 hint_sql = hint + sql
 
                 print("execute stream, sql_id:", i, id)
-                # print(hint)
-                # cur.execute("set google_columnar_engine.enable_columnar_scan=on")
-                # cur.execute("set google_columnar_engine.enable_vectorized_join=on")
-
                 param = None if len(param) == 0 else param[i * 5]
                 plan, _ = run_ap_with_tp(hint_sql, param, k2, htapcontroller, timeout=timeout)
                 if plan is None:

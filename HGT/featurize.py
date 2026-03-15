@@ -1,6 +1,6 @@
-import numpy as np # type: ignore
+import numpy as np
 
-JOIN_TYPES = ["Nested Loop", "Hash Join", "Merge Join", "Sort", "Append"]
+JOIN_TYPES = ["Nested Loop", "Hash Join", "Merge Join", "Sort"]
 LEAF_TYPES = ["Seq Scan", "Index Scan", "Custom Scan", "Bitmap Index Scan", "Index Only Scan", "CTE Scan"]
 ALL_TYPES = JOIN_TYPES + LEAF_TYPES
 TABLES = ["customer", "district", "history", "item", "nation", "new_orders", "order_line", "orders", "region", "stock", "supplier", "warehouse"]
@@ -82,18 +82,46 @@ class TreeBuilder:
         return (np.concatenate((self.__stats(node), rel_vec)), rels)
 
 
+    ## 返回值：
+    ## scan：(node_feature, max_oid, rels)
+    ## join: (node_feature, left, right, join_type, max_oid, rels)
     ## todo: how to deal with operator "Append"?
-    def plan_to_feature_tree(self, plan):
+    def plan_to_feature_tree(self, plan, oid):
         children = plan["Plans"] if "Plans" in plan else []
-
+        myoid = oid
+        ## 返回的oid：当前子树中的最大oid
         if is_scan(plan):
             # assert not children
-            return self.__featurize_scan(plan)
+            node_feature, rels = self.__featurize_scan(plan)
+            node_feature = np.concatenate(([myoid], node_feature))
+            return (node_feature, myoid, rels)
 
         if len(children) == 1:
-            return self.plan_to_feature_tree(children[0])
-
-        # if is_join(plan):
+            return self.plan_to_feature_tree(children[0], oid)
+        
+        if plan["Node Type"] == "Append":
+            # if len(children) > 2:
+            #     raise TreeBuilderError("The number of children is greater than 2: " + str(plan))
+            # arr = np.zeros(len(ALL_TYPES))
+            # my_vec = np.concatenate((arr, self.__stats(plan)))
+            # left = self.plan_to_feature_tree(children[0])
+            # right = self.plan_to_feature_tree(children[1])
+            # return (my_vec, left, right)
+            return self.plan_to_feature_tree(children[0], oid)
+        
+        if plan["Node Type"] == "BitmapOr":
+            return self.plan_to_feature_tree(children[0], oid)
+        if plan["Node Type"] == "Aggregate":
+            if len(children) > 2:
+                raise TreeBuilderError("The number of children is greater than 2: " + str(plan))
+            return self.plan_to_feature_tree(children[1], oid)
+        
+        if plan["Node Type"] == "Bitmap Heap Scan":
+            return self.plan_to_feature_tree(children[0], oid)
+        
+        oid = oid + 1
+        ## todo：维护conflict_operators
+        
         if plan["Node Type"] in JOIN_TYPES[:3]:
             if len(children) > 2:
                 if len(children) != 4:
@@ -101,56 +129,34 @@ class TreeBuilder:
                 children.reverse()
 
             rels = []
-            left = self.plan_to_feature_tree(children[0])
-            right = self.plan_to_feature_tree(children[1])
+            left = self.plan_to_feature_tree(children[0], oid)
+            oid = left[-2] + 1
+            right = self.plan_to_feature_tree(children[1], oid)
+            oid = right[-2]
 
             rels.extend(left[-1])
             rels.extend(right[-1])
-            my_vec = self.__featurize_join(plan, rels)
-            return (my_vec, left, right, JOIN_TYPES.index(plan["Node Type"]), rels)
-        
-        if plan["Node Type"] == "Append":
-            # if len(children) > 2:
-            #     raise TreeBuilderError("The number of children is greater than 2: " + str(plan))
-            # if children[0]["Node Type"] != "Custom Scan":
-            #     raise TreeBuilderError("The first child of Append must be a Custom Scan: " + str(plan))
-            
-            # rels = []
-            # left = self.plan_to_feature_tree(children[0])
-            # right = self.plan_to_feature_tree(children[1])
-            # rels.extend(left[-1])
-            # rels.extend(right[-1])
-            # my_vec = self.__featurize_join(plan, rels)
-            # return (my_vec, left, right, JOIN_TYPES.index(plan["Node Type"]), rels)
-            return self.plan_to_feature_tree(children[0])
-        
+            node_feature = self.__featurize_join(plan, rels)
+            node_feature = np.concatenate(([myoid], node_feature))
+            return (node_feature, left, right, JOIN_TYPES.index(plan["Node Type"]), oid, rels)
+                
         if plan["Node Type"] == "Sort":
             if len(children) > 3:
                 raise TreeBuilderError("Children number of sort is greater than 3: " + str(plan))
             if len(children) == 3:
                 children[1] = children[2] ## InitPlan2
-            # arr = np.zeros(len(ALL_TYPES))
-            # my_vec = np.concatenate((arr, self.__stats(plan)))
 
             rels = []
-            left = self.plan_to_feature_tree(children[0])
-            right = self.plan_to_feature_tree(children[1])
+            left = self.plan_to_feature_tree(children[0], oid)
+            oid = left[-2] + 1
+            right = self.plan_to_feature_tree(children[1], oid)
+            oid = right[-2]
+
             rels.extend(left[-1])
             rels.extend(right[-1])
-            my_vec = self.__featurize_join(plan, rels)
-            return (my_vec, left, right, JOIN_TYPES.index(plan["Node Type"]), rels)
-        
-        if plan["Node Type"] == "BitmapOr":
-            return self.plan_to_feature_tree(children[0])
-        if plan["Node Type"] == "BitmapAnd":
-            return self.plan_to_feature_tree(children[0])
-        if plan["Node Type"] == "Aggregate":
-            if len(children) > 2:
-                raise TreeBuilderError("The number of children is greater than 2: " + str(plan))
-            return self.plan_to_feature_tree(children[1])
-        
-        if plan["Node Type"] == "Bitmap Heap Scan":
-            return self.plan_to_feature_tree(children[0])
+            node_feature = self.__featurize_join(plan, rels)
+            node_feature = np.concatenate(([myoid], node_feature))
+            return (node_feature, left, right, JOIN_TYPES.index(plan["Node Type"]), oid, rels)
         
         raise TreeBuilderError("Node wasn't transparent, a join, or a scan: " + str(plan))
 
@@ -246,8 +252,12 @@ class TreeFeaturizer:
 
     ## 1.每棵树是一个字典，其plan字段表示了真正的计划
     ## 2.输入是一个由树组成的列表
-    def transform(self, trees):
-        return [self.__tree_builder.plan_to_feature_tree(x["Plan"]) for x in trees]
+    # def transform(self, trees):
+    #     return [self.__tree_builder.plan_to_feature_tree(x["Plan"]) for x in trees]
+
+    ## 只转换单个计划
+    def transform(self, tree, oid):
+        return self.__tree_builder.plan_to_feature_tree(tree["Plan"], oid)
 
     def num_operators(self):
         return len(ALL_TYPES)

@@ -1,6 +1,5 @@
 import psycopg2 # type: ignore
 import os
-from model import Model
 import numpy as np # type: ignore
 import time
 import datetime
@@ -8,17 +7,14 @@ from multiprocessing import Pool
 import sys
 import argparse
 import psutil # type: ignore
-sys.path.append("../../..")
-from utils.htap_query_hybench import HTAPController
+sys.path.append("../../")
+from HGT.train import Optimus
+from utils.htap_query import HTAPController
 from utils.restore import restore_hybench, restore_hybench_10x
 from utils.utils import run_ap_with_tp
 
 
 def extract_scan_rows_from_plan(plan_node, table_names):
-    """
-    从执行计划中提取每个表的扫描行数
-    返回: dict {table_name: scan_rows}
-    """
     scan_rows = {t: 0 for t in table_names}
     
     def traverse(node):
@@ -39,23 +35,14 @@ def extract_scan_rows_from_plan(plan_node, table_names):
 
 
 def get_contention_vector():
-    """
-    获取当前系统的资源竞争信息向量 R(t) = [r_cpu, r_mem, r_io]
-    返回值范围为 [0, 1]，表示资源利用率
-    """
-    # CPU利用率 (0-1)
     r_cpu = psutil.cpu_percent(interval=0.1) / 100.0
     
-    # 内存利用率 (0-1)
     r_mem = psutil.virtual_memory().percent / 100.0
     
-    # I/O利用率 (0-1)
-    # 使用磁盘I/O计数来估算I/O压力
     disk_io = psutil.disk_io_counters()
     if hasattr(get_contention_vector, 'prev_io'):
         io_diff = (disk_io.read_bytes + disk_io.write_bytes - 
                    get_contention_vector.prev_io)
-        # 归一化: 假设100MB/s为满负载
         r_io = min(io_diff / (100 * 1024 * 1024 * 0.1), 1.0)
     else:
         r_io = 0.0
@@ -103,10 +90,10 @@ if __name__ == "__main__":
         
         sql_queries.append(ap_queries)
 
-    scan_reg = Model()
+    scan_reg = Optimus()
     scan_reg.load(args.scan_model)
 
-    join_reg = Model()
+    join_reg = Optimus()
     join_reg.load(args.join_model)
 
     table = ["transfer", "loantrans", "customer", "checking", "loanapps"]
@@ -164,18 +151,16 @@ if __name__ == "__main__":
     cur.execute("load \'pg_hint_plan\'")
     tp_count = 0
     start_time = time.time()
-    # 每分钟统计变量
     last_report_time = time.time()
-    minute_tp_count = 0  # 最近一分钟的 tp_results 数量之和
-    minute_query_count = 0  # 最近一分钟处理的查询数量
-    minute_statistics = []  # 存储每分钟统计信息的列表
+    minute_tp_count = 0
+    minute_query_count = 0
+    minute_statistics = []
     
     with Pool(k2 + 1) as p2:
         for i in range(40):
-            for j in range(13):  # AP-1 到 AP-13
+            for j in range(13):
             # for j in range(6, 7):
                 id = j + 1
-                # 从sql_queries获取SQL（使用第 i*5 个查询）
                 ap_queries = sql_queries[id - 1]
                 query_idx = i * 5
 
@@ -189,7 +174,7 @@ if __name__ == "__main__":
                 explain_time += end - start
 
                 start = time.time()
-                logits = scan_reg.predict(plan)[0]  # shape: (35,)
+                logits = scan_reg.run_test_upd(plan)  # shape: (35,)
                 # print("shape(logits):", logits.shape)
                 
                 query_scan_rows = extract_scan_rows_from_plan(plan['Plan'], table)
@@ -214,16 +199,11 @@ if __name__ == "__main__":
 
                     extract_main_rows(plan_t['Plan'], table_stats)
                 
-                # ====== 获取当前系统资源竞争信息 R(t) ======
-                R_t = get_contention_vector()  # [r_cpu, r_mem, r_io]
+                R_t = get_contention_vector()
                 
-                # ====== 定义路径特定的资源消耗向量 ======
-                # 根据论文中的示例值
-                s_row = np.array([0.6, 1.0, 0.5])  # Row scan的资源消耗 [cpu, mem, io]
-                s_col = np.array([0.4, 0.6, 0.2])  # Column scan的资源消耗 [cpu, mem, io]
+                s_row = np.array([0.6, 1.0, 0.5])
+                s_col = np.array([0.4, 0.6, 0.2])
                 
-                # ====== 可学习参数向量 η ======
-                # 初始化为均匀权重，后续可以通过训练学习
                 eta = np.array([0, 0, 0])
                 
                 theta = {t: 0 for t in table}
@@ -232,12 +212,10 @@ if __name__ == "__main__":
                 for hint_id in range(32):
                     total_delta_cost = 0.0
                     
-                    # ====== 计算聚合资源消耗 S(q,h) ======
-                    S_qh = np.zeros(3)  # [cpu, mem, io]
+                    S_qh = np.zeros(3)
                     
                     for table_name in table:
                         
-                        # ====== 计算 w_T: 查询在该表上扫描的行数占总扫描行数的比例 ======
                         w_T = query_scan_rows.get(table_name, 0) / total_scan_rows
                         
                         delta_rows = table_stats[table_name]['delta_rows']
@@ -255,17 +233,13 @@ if __name__ == "__main__":
                         C_delta_T = theta[table_name] * m_T * use_columnar
                         total_delta_cost += w_T * C_delta_T
                         
-                        # ====== 累加资源消耗: S(q,h) = Σ_T w_T * s_p(h,t) ======
                         if use_columnar:
                             S_qh += w_T * s_col
                         else:
                             S_qh += w_T * s_row
                     
-                    # ====== 计算 Contention Cost: D_contention = η^T (R(T) · S(q,h)) ======
-                    # 元素级乘法 R(T) · S(q,h)，然后加权求和
                     contention_cost = np.dot(eta, R_t * S_qh)
                     
-                    # ====== 综合调整 logits ======
                     adjusted_logits[hint_id] = logits[hint_id] - total_delta_cost - contention_cost
                 
                 scan_hint_id = int(np.argmax(adjusted_logits))
@@ -283,7 +257,7 @@ if __name__ == "__main__":
                 explain_time += end - start
 
                 start = time.time()
-                join_hint = join_reg.predict(plan)
+                join_hint = join_reg.run_test_upd(plan)
                 end = time.time()
                 inference_time += end - start
 
@@ -306,27 +280,22 @@ if __name__ == "__main__":
                 sql_latency[j] += plan['Execution Time']
                 tp_count += len(tp_results)
                 
-                # 更新每分钟统计
                 minute_tp_count += len(tp_results)
                 minute_query_count += 1
                 
-                # 检查是否已经过了一分钟
                 current_time = time.time()
                 if current_time - last_report_time >= 60:
                     elapsed_minutes = (current_time - last_report_time) / 60
-                    # 保存统计信息到列表
                     minute_statistics.append({
                         'time': current_time,
                         'elapsed_minutes': elapsed_minutes,
                         'tp_count': minute_tp_count,
                         'query_count': minute_query_count
                     })
-                    # 重置计数器
                     minute_tp_count = 0
                     minute_query_count = 0
                     last_report_time = current_time
     
-    # 程序结束，保存最后一段时间的统计（如果有剩余）
     end_time = time.time()
     if minute_tp_count > 0 or minute_query_count > 0:
         elapsed_minutes = (end_time - last_report_time) / 60
@@ -337,7 +306,6 @@ if __name__ == "__main__":
             'query_count': minute_query_count
         })
     
-    # 输出列表格式统计信息
     if len(minute_statistics) > 0:
         tp_list = [s['tp_count'] for s in minute_statistics]
         query_list = [s['query_count'] for s in minute_statistics]
@@ -345,7 +313,6 @@ if __name__ == "__main__":
         print(f"TP结果数量列表: {tp_list}")
         print(f"处理查询数量列表: {query_list}")
         
-        # 保存到文件
         output_filename = f"minute_statistics_TCNN_{args.db}_{time.strftime('%Y%m%d_%H%M%S', time.localtime(start_time))}.txt"
         try:
             with open(output_filename, 'w', encoding='utf-8') as f:
@@ -366,8 +333,6 @@ if __name__ == "__main__":
     cur.close()
     print("k1:", k1, "k2:", k2)
 
-    # set_refresh_threshold(50)
-
     print(sql_latency)
     print(scan_sql_latency)
     print(join_sql_latency)
@@ -386,5 +351,4 @@ if __name__ == "__main__":
     print("95 latency:", latency[idx95], scan_latency[idx95] if len(scan_latency) > idx95 else 0, join_latency[idx95] if len(join_latency) > idx95 else 0)
     print("99 latency:", latency[idx99], scan_latency[idx99] if len(scan_latency) > idx99 else 0, join_latency[idx99] if len(join_latency) > idx99 else 0)
     print("99.5 latency:", latency[idx995], scan_latency[idx995] if len(scan_latency) > idx995 else 0, join_latency[idx995] if len(join_latency) > idx995 else 0)
-    # print(scan_hint_id_list)
     

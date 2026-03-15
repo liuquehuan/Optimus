@@ -4,10 +4,9 @@ import torch.nn.functional as F # type: ignore
 from layers import GraphAttentionLayer
 
 
-class GAT(nn.Module): ## 三层gat，alpha是leakyrelu的参数
+class HGT(nn.Module):
     def __init__(self, nfeat, nclass, dropout, alpha, nhid=32, nheads=8):
-        """Dense version of GAT."""
-        super(GAT, self).__init__()
+        super(HGT, self).__init__()
         self.dropout = dropout
 
         ## concat为True表示这是中间层，需要加一个elu
@@ -27,7 +26,6 @@ class GAT(nn.Module): ## 三层gat，alpha是leakyrelu的参数
         self.linear = nn.Linear(16 * 4, nclass)
         
     def forward(self, x, adj):
-        ## 一上来就dropout？？？？？
         x = F.dropout(x, self.dropout, training=self.training)
         x = torch.cat([att(x, adj) for att in self.attentions], dim=1)
         x = F.dropout(x, self.dropout, training=self.training)
