@@ -1,0 +1,5 @@
+.DS_Store
+*.log
+**/minute_statistics_*.txt
+__pycache__/
+*.pyc
