@@ -2,7 +2,7 @@ def compute_cost(node):
     return (float(node["Total Cost"]) - float(node["Startup Cost"])) / 1e6
 
 
-def get_used_tables(node): ## 涉及的所有表名
+def get_used_tables(node):
     tables = []
 
     stack = [node]
